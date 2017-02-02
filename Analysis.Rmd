@@ -1,0 +1,300 @@
+---
+title: "The economic and population effect of storm events"
+author: "Samuel Chan"
+output: html_document
+---
+
+# Synopsis
+The following report studies the economic and population effect of storm events from November 1950 to 2011. It presents its conclusion on Tornado being the storm event that has the greatest impact on population health, being responsible for 5,633 deaths throughout the observational period. It also observe that catastrophic-but-rare events such as tornadoes, thunderstorm wind and hurricane does great damages to property and crops on a per-event basis, but overall have lesser economic consequences than frequent weather events such as flood, which alone has caused an astounding 150.32 billion USD in economic losses between 1950 to 2011.
+
+Link to raw data: [Storm Events Database](https://www.ncdc.noaa.gov/stormevents/)
+
+# Data Processing
+- Load the required libraries
+```{r}
+library(ggplot2)
+```
+- Make sure the dataset ("StormData.csv") is in the same directory, read it into the
+workspace using read.csv.
+- Also at this step we would convert the date
+
+```{r, cache=TRUE}
+raw <- read.csv(unzip("StormData.csv.zip"))
+raw[,2] <- as.Date(raw$BGN_DATE, "%m/%d/%Y")
+data <- raw[,c(2,7,8,23,24,25,26,27,28,29)]
+```
+
+We also create a subset of the raw dataframe, containing only the variables that
+contribute to our analysis goals.
+
+We see that within the data df, most of the variables are self-explanatory except for PROPDMGEXP
+and CROPDMGEXP. For this experiment, we had to examine the relationship between PROPDMG / PROPDMGEXP, CROPDMG / CROPDMGEXP. A simple google search suggest that **EXP means Exponent** in this dataset (although the official document neither confirmed or denied this definition). 
+
+```{r, cache=TRUE}
+# Examine the possible values for PROPDMGEXP and CROPDMGEXP
+table(data$PROPDMGEXP)
+table(data$CROPDMGEXP)
+```
+We see from this code chunk that the possible values for [PROP|CROP]DMGEXP are:
+1. "" (empty)
+2. - (single dash)
+3. ? (question mark)
+4. + (plus symbol)
+5. 0 - 8 (numeric)
+6. B
+7. h
+8. H
+9. K
+10. m
+11. M
+
+The following code chunk is purely exploratory and thus optional.
+```{r, cache=TRUE, eval=FALSE}
+# Since a lot of values in PROPDMGEXP are missing values (""), we want to see if that's indicative of no CROPDMG
+head( data[data$CROPDMGEXP == "" & data$CROPDMG != 0, ] ) # 3 out of 618413 records have non-zero CROPDMG
+head( data[data$PROPDMGEXP == "" & data$PROPDMG != 0, ] )
+
+# Read a few remarks to find possible explanations where DMG != 0 but DMGEXP == 0
+head(raw[raw$CROPDMGEXP == "" & raw$CROPDMG != 0, ]$REMARKS, 10)
+head(raw[raw$PROPDMGEXP == "" & raw$PROPDMG != 0, ]$REMARKS, 10)
+```
+
+### Dealing with "" (empty values) for[PROP|CROP]DMGEXP
+
+We will now assign the total damage to be 0 wherever [PROP|CROP]DMGEXP == "" (empty) based on:
+- Our interpretation of the remarks
+- The fact that the non-zero dmg represents an incredibly small number from the subset (3 out of 618413, 76 out of 465934)
+
+``` {r, cache=TRUE}
+# Create the prop.dmg and crop.dmg variables so we can update them with the actual values with prop accounted
+data$prop.dmg <- data$PROPDMG
+data$crop.dmg <- data$CROPDMG
+
+# When EXP == "", set net damage to 0
+data$prop.dmg[data$PROPDMGEXP == ""] <- 0
+data$crop.dmg[data$CROPDMGEXP == ""] <- 0
+```
+
+### Dealing with "-" (single dash) for[PROP|CROP]DMGEXP
+
+There is only one observation with the dash (-) value for the PROPDMGEXP (none for CROPDMGEXP). Because this observation row has no remarks, we have to assign a proponent of 10 to it. We assign 10 because it seems the most logical, albeit a speculative one at that. What is fortunate is that this is just 1 observation so it shouldn't impact the overall analysis in any significant way.
+
+```{r, cache=TRUE}
+data[data$PROPDMGEXP == "-", ]
+
+# When EXP == "-", set net damage to 10 * DMG
+data$prop.dmg[data$PROPDMGEXP == "-"] <- data$PROPDMG[data$PROPDMGEXP == "-"] * 10
+
+```
+
+### Dealing with "?" for[PROP|CROP]DMGEXP
+
+There are 8 and 7 observation values in PROPDMGEXP and CROPDMGEXP respectively with a question mark ("?"). 
+
+```{r, cache=TRUE}
+head(data[data$PROPDMGEXP == "?", ])
+head(data[data$CROPDMGEXP == "?", ])
+```
+
+All the corresponding PROPDMG and CROPDMG are zero, so we will set net damage to 0.
+```{r, cache=TRUE}
+# When EXP == "-", set net damage to 0
+data$prop.dmg[data$PROPDMGEXP == "?"] <- 0
+data$crop.dmg[data$CROPDMGEXP == "?"] <- 0
+```
+
+### Dealing with "+" for[PROP|CROP]DMGEXP
+
+There are only five observation with the dash (+) value for the PROPDMGEXP (none for CROPDMGEXP). We access the REMARKS column to study what possible value to assign as a proponent for this value. For good measure, we also cross-check with the NOAA website using the records where PROPDMGEXP == "+". We decide with a proponent of 1. Since default prop.dmg == PROPDMGEXP, we don't need to transform the value additionally.
+
+```{r, cache=TRUE, eval=FALSE}
+data[data$PROPDMGEXP == "+", ]
+raw[data$PROPDMGEXP == "+", ]$REMARKS
+```
+
+### Dealing with 0-8 for[PROP|CROP]DMGEXP
+
+There are 216 and 19 observation values in PROPDMGEXP and CROPDMGEXP respectively with a 0 value.
+```{r, cache=TRUE}
+head(data[data$PROPDMGEXP == 0, ])
+head(data[data$CROPDMGEXP == 0, ])
+```
+
+If we extract the observation #196458 (Georgia, CROPDMG 20) and #200888 (Iowa, CROPDMG 50), and again check it against the [NOAA website] (https://www.ncdc.noaa.gov/stormevents/), we see that it a CROPDMGEXP value of 0 represents a proponent of 10 ([Access the link to NOAA](https://www.ncdc.noaa.gov/stormevents/listevents.jsp?eventType=%28C%29+Hail&beginDate_mm=07&beginDate_dd=17&beginDate_yyyy=1995&endDate_mm=10&endDate_dd=17&endDate_yyyy=1995&county=ALL&hailfilter=0.00&tornfilter=0&windfilter=000&sort=DT&submitbutton=Search&statefips=13%2CGEORGIA)).
+
+The Database list a crop damage of $0.2K (=$200) for the #196458 event, which is CROPDMG * 10. Other checks using matching records confirm this. In fact, any CROPDMGEXP or PROPDMGEXP with a value of 0 to 8 (numeric) all represents a proponent of 10. 
+
+```{r, cache=TRUE}
+# When EXP %in% c("0","1","2","3","4","5","6","7","8"), set net damage to 10 * DMG
+num <- c("0","1","2","3","4","5","6","7","8")
+data[data$PROPDMGEXP %in% num, 11] <- data$PROPDMG[data$PROPDMGEXP %in% num] * 10
+data[data$CROPDMGEXP %in% num, 12] <- data$CROPDMG[data$CROPDMGEXP %in% num] * 10
+```
+
+### Dealing with "B" for[PROP|CROP]DMGEXP
+
+There are 40 and 9 observation values in PROPDMGEXP and CROPDMGEXP respectively with a "B" value. In our investigation, we use the REMARKS variable of two random observations, one where PROPDMGEXP == "B" and the other where CROPDMGEXP == "B" 
+```{r, cache=TRUE}
+head(data[data$PROPDMGEXP == "B", ])
+head(data[data$CROPDMGEXP == "B", ])
+
+b.p <- raw[raw$PROPDMGEXP == "B", c("PROPDMG", "REMARKS")]
+c.p <- raw[raw$CROPDMGEXP == "B", c("CROPDMG", "REMARKS")]
+b.p[3,]
+c.p[1,]
+```
+
+We observe that the PROPDMG of 2.1 with a PROPDMGEXP of "B" is remarked as a "preliminary damage ... (amounting to) $2.1 billion dollars". Similarly, in the second random test, we observe that the CROPDMG of 0.4 with a CROPDMGEXP of "B" is remarked as follow: "the poulty industry was hit hard along with a number of crops ... the $400 million crop damage is just an estimate". We conclude that "B" do in fact stand for "billion". 
+
+```{r, cache=TRUE}
+# When EXP == "B", set net damage to 1000000000 * DMG
+data$prop.dmg[data$PROPDMGEXP == "B"] <- data$PROPDMG[data$PROPDMGEXP == "B"] * 1000000000
+data$crop.dmg[data$CROPDMGEXP == "B"] <- data$CROPDMG[data$CROPDMGEXP == "B"] * 1000000000
+```
+
+### Dealing with H/h, K/k and M/m for[PROP|CROP]DMGEXP
+
+With "B" representing "billion", it's not too far-fetched to guess the remaining possible values of EXP:
+- H / h: Hundred
+- K / k: Thousand
+- M / m: Million
+
+We can verify this accordingly using grep to look for "hundred", "thousand", "million" in the remarks:
+```{r, cache=TRUE, warning=F}
+# Verify M == million (x1000000)
+m.p <- raw[raw$PROPDMGEXP == "M" | raw$PROPDMGEXP == "m", c("PROPDMG", "REMARKS")]
+head(m.p[grep("million", m.p$REMARKS, fixed=T),],2)
+```
+- Notice our first observation row 187581 list PROPDMG as 25 with "m" as its exponent value, and the remark confirmed that "preliminary damage estimates were 25 million". 
+- Notice our second observation row 187583list PROPDMG as 48 with "m" as its exponent value, and the remark confirmed that "preliminary damage estimates were 48 million with half of that being from tree damage in the Conecuh National Forest."
+
+We can use the above method to verify the K/k and H/h values in our EXP variable
+```{r, cache=TRUE}
+# Verify k == thousands (x1000)
+raw[188466, c("PROPDMG", "CROPDMG", "PROPDMGEXP", "REMARKS")]
+```
+
+With those proof, we now assign the appropriate damage value
+```{r, cache=TRUE}
+# When EXP == [h|H] , set net damage to 100 * DMG
+data$prop.dmg[data$PROPDMGEXP == "H" | data$PROPDMGEXP == "h"] <- data$PROPDMG[data$PROPDMGEXP == "H" | data$PROPDMGEXP == "h"] * 100
+# neither "H" nor "h" in CROPDMGEXP variable
+
+# When EXP == [k|K] , set net damage to 1000 * DMG
+data$prop.dmg[data$PROPDMGEXP == "K" | data$PROPDMGEXP == "k"] <- data$PROPDMG[data$PROPDMGEXP == "K" | data$PROPDMGEXP == "k"] * 1000
+data$crop.dmg[data$CROPDMGEXP == "K" | data$CROPDMGEXP == "k"] <- data$CROPDMG[data$CROPDMGEXP == "K" | data$CROPDMGEXP == "k"] * 1000
+
+# When EXP == [m|M] , set net damage to 1000000 * DMG
+data$prop.dmg[data$PROPDMGEXP == "M" | data$PROPDMGEXP == "m"] <- data$PROPDMG[data$PROPDMGEXP == "M" | data$PROPDMGEXP == "m"] * 1000000
+data$crop.dmg[data$CROPDMGEXP == "M" | data$CROPDMGEXP == "m"] <- data$CROPDMG[data$CROPDMGEXP == "M" | data$CROPDMGEXP == "m"] * 1000000
+```
+
+# Results
+
+- Across the United States, which types of events (as indicated in the 𝙴𝚅𝚃𝚈𝙿𝙴 variable) are most harmful with respect to population health?
+- Across the United States, which types of events have the greatest economic consequences?
+
+We will now examine the relationship between event types and fatalities using ggplot2. This will give us an idea of the impact these different types of events have on population health. 
+
+## Analysis 1: Types of storm events that are most harmful with respect to population health
+
+```{r, fig.width=14, fig.height=14, cache=TRUE}
+# Aggregate to get the summary statistics of fatalities by event type
+fatal.sum.byEV <- aggregate(data$FATALITIES, by=list(data$EVTYPE), sum)
+
+# Rename the columns
+colnames(fatal.sum.byEV) <- c("Event", "Fatalities")
+
+# Order the dataset by Fatalities in decreasing order and select only events that has contributed to at least 100 deaths during the observation period (1950 to November 2011)
+fatal.sum.sort.byEV <- fatal.sum.byEV[ with(fatal.sum.byEV, order(-Fatalities)), ]
+fatal.100 <- fatal.sum.sort.byEV[fatal.sum.sort.byEV$Fatalities >= 100, ]
+
+ggplot(fatal.100, aes(x=reorder(Event, Fatalities), y=Fatalities)) + geom_bar(stat="identity") + coord_flip() + geom_text(aes(label=Fatalities), vjust=0.4, hjust=-0.2, size=3) + theme_light() + labs(x = "Storm Event", y = "Number of Fatalities", title="Deaths by Storm Event Types in US \n (November 1950 to 2011) \n") + theme(plot.title=element_text(size=12), plot.margin=unit(c(0.5,1.5,0.5,1), "cm"))
+
+```
+
+We observe that Tornado is the storm event that has the greatest impact on population health, being responsible for 5,633 deaths alone between November 1950 to 2011. This is followed by excessive heat at 1903 deaths. Flash flood, Heat, lightning and thunderstorm wind events are third to sixth in that order, with each event type resulting in more than 500 deaths. 
+
+## Analysis 2: Types of events that have the greatest economic consequences over the course of 1950 to 2011
+
+```{r, fig.width=16, fig.height=15, cache=TRUE}
+# Create a variable called 'econ' that store the combined economic losses
+data$econ <- data$prop.dmg + data$crop.dmg
+
+# Aggregate to get the summary statistics of economic losses by event type
+econ.byEV <- aggregate(data$econ, by=list(data$EVTYPE), sum)
+
+# Create frequency groups using cut
+econ.freq <- aggregate(data$econ, by=list(data$EVTYPE), length)
+econ.freq$group <- cut(econ.freq$x, breaks = c(0, 500, 1000, 5000, 10000, 50000, 100000, Inf), labels = c("Below 500", "500 to 999", "1,000 to 4,999", "5,000 to 9,999", "10,000 to 49,999", "50,000 to 100,000", "Above 100,000"), right = FALSE)
+
+# Combine the freq columns to the original dataframe
+econ.byEV <- cbind(econ.byEV, econ.freq$group)
+
+# Order the dataset by their combined economic losses in decreasing order 
+econ.sort.byEV <- econ.byEV[with(econ.byEV, order(-x)), ]
+
+# Select only the top 20, and rename the columns
+econ.20 <- econ.sort.byEV[1:20, ]
+colnames(econ.20) <- c("Event", "EconomicDmg", "Frequency")
+econ.20$dmgB <- round((econ.20$EconomicDmg / 1000000000), digits=2)
+
+ggplot(econ.20, aes(x=reorder(Event, dmgB), y=dmgB)) + geom_bar(stat="identity", aes(colour=Frequency)) + coord_flip() + geom_text(aes(label=dmgB), vjust=0.4, hjust=-0.2, size=3) + theme_classic() + labs(x = "Storm Event", y = "Ecomonic Damages (in billion, USD)", title="Total Property and Crop Losses by Storm Event Types in US \n from Storm Events (November 1950 to 2011) \n") + theme(plot.title=element_text(size=12), plot.margin=unit(c(0.5,1.5,0.5,1), "cm"))
+```
+
+Over the course of 61 years, **flood** has caused an astounding 150.32 billion USD in economic losses, more than any other weather events. **Hurricane and typhoon** contributed to 71.91 billion of economic losses, followed by **Tornado** at 43.32 billion. These three types of event combined have greater economic consequences than the remaining 17 storm events on the list.  
+
+## Analysis 3: Types of events that, on average, causes the most potent economic damages 
+
+```{r, fig.width=16, fig.height=18, cache=TRUE}
+
+# Aggregate to get the summary statistics of economic damages by event type
+econ.avg.byEV <- aggregate(data$econ, by=list(data$EVTYPE), mean)
+
+# Combine the freq columns to the original dataframe
+econ.avg.byEV <- cbind(econ.avg.byEV, econ.freq$group)
+
+# Order the dataset by their avg economic damages in decreasing order 
+econ.sort.avg <- econ.avg.byEV[with(econ.avg.byEV, order(-x)), ]
+
+# Select only the top 40, and rename the columns
+econ.avg40 <- econ.sort.avg[1:40, ]
+colnames(econ.avg40) <- c("Event", "AvgEcoDmg", "Frequency")
+
+econ.avg40$dmgM <- round((econ.avg40$AvgEcoDmg / 1000000), digits = 2 )
+
+ggplot(econ.avg40, aes(x=reorder(Event, dmgM), y=dmgM)) + geom_bar(stat="identity", aes(colour=Frequency)) + coord_flip() + geom_text(aes(label=dmgM), vjust=0.4, hjust=-0.1, size=3) + theme_classic() + labs(x = "Storm Event", y = "Ecomonic Damages (in million, USD)", title="Avg. Property and Crop Losses by Storm Event Types in US \n from Storm Events (November 1950 to 2011) \n") + theme(plot.title=element_text(size=12), plot.margin=unit(c(0.5,1.2,0.5,1), "cm"))
+```
+
+Fortunately, the most catastrophic storm events were all within the lowest frequency group, so while event types such as **tornadoes**, **thunderstorm wind** and **hurricane** bring with them the greatest economic consequence, they are infrequent. In fact, the top 25 most catastrophic storm events were all within the least-frequent group, occuring less than 500 times during the observation period spanning 1950 to 2011.
+
+While **flood** on the overall has caused the greatest amount of economic losses, it's per-unit damage is relatively low compared to the others. It's contribution to economic damages however can be observed from it's fairly high frequency of occurance. 
+
+# Further Observations and Recommendations
+Throughout the preparation of this report, a few inconsistencies in the original dataset from NOAA can be observed.  
+```{r, cache=TRUE}
+raw[188395, c("PROPDMG", "CROPDMG", "PROPDMGEXP", "REMARKS")]
+raw[188476, c("PROPDMG", "CROPDMG", "PROPDMGEXP", "REMARKS")]
+```
+Notice for observation #188395, while the damage was remarked to be "approximately $100 thousand", it was recorded as $500 thousand instead. Similarly for observation #188476, while it was remarked that the lightning "caused about $60,000 in damage" it was recorded as $500 thousand. One possible explanation could be such that the remarks was based on an early estimation, and subsequent damages -- to property or crops -- were updated in the respective field the initial observation stood and hence the remarks may have just captured the partial amount of the full losses. It is not possible and unproductive for us to speculate on the reasons of such discrepancies, but these findings must be noted in this report to inform readers of its limitations and hopefully call for a more robust process in data collection. 
+
+```{r, cache=TRUE}
+econ.freq[15:25, ]
+```
+
+A second recommendation is regarding the consistency of terminologies, variables and values in the online Storm Data software program as well as on the preparer's part. Notice how there are duplicate names for what is highly likely to be a single event type: 
+[18] AVALACE and [19]AVALANCHE; 
+[20] BEACH EROSIN, [21] Beach Erosion, [22] BEACH EROSION and [23] BEACH EROSION/COASTAL FLOOD 
+
+# APPENDIX: Description of the Variables in the 'data' dataframe
+- BGN_DATE: The approximate time the event started to have an impact (health / economic)
+- STATE: State code
+- EVTYPE: An individual type of event, e.g High Wind, Blizzard, Tornado etc.
+- FATALITIES: Number of fatalities
+- INJURIES: Number of injuries
+- PROPDMG: Damage to property
+- PROPDMGEXP: Exponent of recorded damage to property
+- CROPDMG: Damage to crops
+- CROPDMGEXP: Exponent of recorded damage to crops
+- WFO: Weather Forecast Offices, see a list or WFO names on [NOAA website]  (http://www.nws.noaa.gov/emwin/wfos.htm)
+
